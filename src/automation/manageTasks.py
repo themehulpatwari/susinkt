@@ -1,10 +1,15 @@
 import asyncio
 from selenium import webdriver
+from selenium.webdriver.chrome.options import Options
 import getInformation
 import action
 
 async def main():
-    driver = webdriver.Chrome()
+    # Configure Chrome to connect to existing browser
+    chrome_options = Options()
+    chrome_options.add_experimental_option("debuggerAddress", "127.0.0.1:9222")
+    
+    driver = webdriver.Chrome(options=chrome_options)
     driver.maximize_window()
 
     driver.get("https://www.youtube.com/shorts")
