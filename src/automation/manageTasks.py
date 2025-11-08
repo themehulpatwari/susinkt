@@ -10,10 +10,17 @@ async def main():
 
     task1 = asyncio.create_task(getInformation.fetch_reel())
     task2 = asyncio.create_task(getInformation.fetch_url(driver))
-    task3 = asyncio.create_task(action.scroll())
+
+    await asyncio.sleep(5)
+
+    for i in range(1):
+        task3 = asyncio.create_task(action.scroll())
+
+    await asyncio.sleep(1)
+    task4 = asyncio.create_task(action.click_like())
 
     try:
-        await asyncio.gather(task1, task2, task3)
+        await asyncio.gather(task1,task2,task3,task4)
     except asyncio.CancelledError:
         print("Tasks were cancelled.")
     except Exception as e:
