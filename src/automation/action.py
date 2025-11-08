@@ -6,5 +6,5 @@ async def scroll():
     print("scrolled")
     pyautogui.moveTo(dim.width/2,dim.height/2)
     while True:
-        pyautogui.vscroll(-1000)
-        await asyncio.sleep(1)
+        pyautogui.vscroll(-500)
+        await asyncio.sleep(2)

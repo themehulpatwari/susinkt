@@ -41,7 +41,7 @@ async def fetch_reel():
     loop = asyncio.get_running_loop()
     try:
         while True:
-            await asyncio.wait_for(loop.run_in_executor(None,lambda:pyautogui.screenshot(file_path,region=(1200,200,1000,1000))),timeout=1)
+            await asyncio.wait_for(loop.run_in_executor(None,lambda:pyautogui.screenshot(file_path,region=(1000,300,1000,1300))),timeout=1)
             print("successful")
             await asyncio.sleep(1)
     except asyncio.TimeoutError:
