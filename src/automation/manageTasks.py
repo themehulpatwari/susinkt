@@ -6,6 +6,7 @@ import action
 async def main():
     driver = webdriver.Chrome()
     driver.maximize_window()
+
     driver.get("https://www.youtube.com/shorts")
 
     task1 = asyncio.create_task(getInformation.fetch_reel())
@@ -16,11 +17,13 @@ async def main():
     for i in range(1):
         task3 = asyncio.create_task(action.scroll())
 
-    await asyncio.sleep(1)
+    await asyncio.sleep(2)
     task4 = asyncio.create_task(action.click_like())
+    await asyncio.sleep(2)
+    task5 = asyncio.create_task(action.click_dislike())
 
     try:
-        await asyncio.gather(task1,task2,task3,task4)
+        await asyncio.gather(task1,task2,task3,task4,task5)
     except asyncio.CancelledError:
         print("Tasks were cancelled.")
     except Exception as e:
