@@ -6,7 +6,7 @@ import time
 
 mp_facemesh = mp.solutions.face_mesh = mp.solutions.face_mesh
 face_mesh = mp_facemesh.FaceMesh(min_detection_confidence=0.5, min_tracking_confidence=0.5)
-Snap = True;
+Snap = True
 mp_drawing = mp.solutions.drawing_utils
 
 drawing_spec = mp_drawing.DrawingSpec(thickness=1, circle_radius=1)
@@ -15,7 +15,7 @@ capture = cv2.VideoCapture(0) #stores opened webcam
 
 porient = "Neutral"
 stop = False
-pauseTime = 0;
+pauseTime = 0
 timer = 1
 
 # def snapCheck(cTime, orientation):
