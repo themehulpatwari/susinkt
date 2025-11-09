@@ -6,8 +6,8 @@ from datetime import datetime
 import isodate
 import requests
 from typing import Optional
-from category_id import CATEGORY_MAP
-from process_image import FastImageProcessor
+from .category_id import CATEGORY_MAP
+from .process_image import FastImageProcessor
 
 load_dotenv()
 

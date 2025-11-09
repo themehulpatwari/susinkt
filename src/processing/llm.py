@@ -128,15 +128,15 @@ class VideoDecisionSystem:
             # Calculate confidence based on collection size
             total_samples = stay_count + scroll_count
             if total_samples > 0:
-                confidence = min(100, (total_samples / 30) * 100)  # Max confidence at 30+ videos
+                confidence = min(100, (total_samples / 50) * 100)  # Max confidence at 50+ videos
                 lines.append("")
                 lines.append(f"Behavioral Data Confidence: {confidence:.0f}%")
-                if confidence < 30:
-                    lines.append("  Note: Low confidence - prioritize user preferences")
-                elif confidence < 70:
-                    lines.append("  Note: Moderate confidence - balance preferences and behavior")
+                if confidence < 40:
+                    lines.append("  Note: Low confidence - follow user preferences strictly")
+                elif confidence < 100:
+                    lines.append("  Note: Moderate confidence - balance preferences with behavior")
                 else:
-                    lines.append("  Note: High confidence - behavior is reliable")
+                    lines.append("  Note: High confidence - behavior patterns are reliable")
         
         return '\n'.join(lines)
     
@@ -162,7 +162,7 @@ class VideoDecisionSystem:
         
         # Calculate confidence and determine weighting strategy
         total_samples = stay_count + scroll_count
-        confidence = min(100, (total_samples / 30) * 100)
+        confidence = min(100, (total_samples / 50) * 100)
         
         # Dynamic weighting based on collection size
         if total_samples == 0:
@@ -170,29 +170,33 @@ class VideoDecisionSystem:
             weight_instruction = (
                 "IMPORTANT: This is a cold start with NO behavioral data. "
                 "Make your decision ENTIRELY based on the user's preferences. "
+                "When unsure, default to SCROLL to avoid wasting the user's time. "
                 "Ignore the behavioral similarity scores as they are meaningless."
             )
-        elif confidence < 30:
-            # Low confidence - heavy preference weighting
+        elif confidence < 40:
+            # Low confidence - strictly follow user preferences
             weight_instruction = (
-                "WEIGHTING STRATEGY: Low behavioral confidence (few samples). "
-                "Prioritize user preferences (~95%) with minimal consideration for behavioral patterns (~5%). "
-                "The behavioral data may not be representative yet."
+                "WEIGHTING STRATEGY: Low behavioral confidence (< 20 samples). "
+                "Follow user preferences STRICTLY (~95%) with minimal consideration for behavioral patterns (~5%). "
+                "The behavioral data is not reliable yet. "
+                "When unsure, default to SCROLL to be conservative."
             )
-        elif confidence < 70:
+        elif confidence < 100:
             # Moderate confidence - balanced approach
             weight_instruction = (
-                "WEIGHTING STRATEGY: Moderate behavioral confidence. "
-                "Balance user preferences (~80%) with behavioral patterns (~20%). "
-                "Use behavioral data to refine your understanding of user preferences."
+                "WEIGHTING STRATEGY: Moderate behavioral confidence (20-49 samples). "
+                "Balance user preferences (~70%) with behavioral patterns (~30%). "
+                "Use behavioral data to refine your understanding, but preferences should still dominate. "
+                "When unsure, default to SCROLL to be conservative."
             )
         else:
-            # High confidence - significant behavioral weight
+            # High confidence - trust behavioral patterns more
             weight_instruction = (
-                "WEIGHTING STRATEGY: High behavioral confidence (many samples). "
-                "Balance user preferences (~60%) with strong behavioral patterns (~40%). "
-                "Behavioral data is reliable and can inform preference refinement. "
-                "If behavior contradicts stated preferences, consider that user's taste may have evolved."
+                "WEIGHTING STRATEGY: High behavioral confidence (50+ samples). "
+                "Balance user preferences (~50%) with strong behavioral patterns (~50%). "
+                "Behavioral data is now reliable and can equally inform decisions. "
+                "When preferences and behavior conflict, favor behavior as it reflects actual engagement. "
+                "When unsure, use behavioral similarity scores to guide the decision."
             )
         
         prompt = f"""You are an AI assistant that helps decide whether a user should STAY and watch a YouTube Short or SCROLL to the next one.
@@ -214,8 +218,9 @@ Your response MUST be a valid JSON object with this EXACT format:
 }}
 
 Remember:
-- User preferences are ALWAYS the primary factor
-- Behavioral patterns help refine understanding but should not override explicit preferences
+- User preferences are the primary factor, especially early on
+- Behavioral patterns become more important as confidence increases (50+ videos)
+- When unsure or confidence is low, follow user preferences and default to SCROLL
 - Consider content type, topic, engagement quality, and visual elements
 - Be decisive - choose either STAY or SCROLL, not both
 - Keep reasoning to a single concise sentence"""
@@ -303,6 +308,11 @@ Remember:
         
         # Build the prompt
         prompt = self.build_prompt(formatted_metadata, user_preferences, stay_count, scroll_count)
+        
+        # Print the prompt for debugging
+        print(f"\n--- LLM Prompt ---")
+        print(prompt)
+        print(f"--- End Prompt ---\n")
         
         # Send to Gemini API
         try:
