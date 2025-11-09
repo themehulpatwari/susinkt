@@ -1,6 +1,6 @@
 # Susinkt
 
-An AI-powered YouTube Shorts recommendation system that learns your preferences and auto-curates your feed.
+An AI-powered YouTube Shorts recommendation system that learns your preferences and auto-(curates/scrolls) your feed.
 
 ## What It Does
 
