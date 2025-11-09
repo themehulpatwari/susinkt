@@ -12,16 +12,19 @@ from pathlib import Path
 # Add parent directories to path for imports
 sys.path.append(str(Path(__file__).parent.parent))
 
-from automation.getInformation import fetch_url
 from selenium import webdriver
 from selenium.webdriver.chrome.options import Options
 from selenium.webdriver.common.keys import Keys
 import time
+import cv2
 
 # Import processing modules
 from processing.metadata import YouTubeMetadataExtractor
 from processing.embedding import VideoEmbeddingStore
 from processing.llm import VideoDecisionSystem
+
+# Import hand gesture controller
+from cv.handGestureController import HandGestureController
 
 
 def get_user_preference_from_gui():
@@ -55,6 +58,7 @@ async def process_video(url: str, user_preference: str, metadata_extractor, embe
         metadata = metadata_extractor.get_processed_metadata(url, process_image=False)
         
         if not metadata:
+            print(f"[Warning] Could not extract metadata for: {url}")
             return None, None, None
         
         stay_sim, scroll_sim = embedding_store.get_similarity_scores(metadata)
@@ -77,6 +81,7 @@ async def process_video(url: str, user_preference: str, metadata_extractor, embe
         return decision, reasoning, metadata
         
     except Exception as e:
+        print(f"[Error] Failed to process video {url}: {e}")
         return None, None, None
 
 
@@ -87,22 +92,37 @@ def classify_and_add_to_collection(video_data: dict, watch_time: float, embeddin
     """
     duration = video_data['duration']
     metadata = video_data['metadata']
+    llm_decision = video_data['decision']
     
-    # Minimum watch time of 1 second to avoid false negatives
-    # If watched >= 50% of duration OR at least 1 second, classify as STAY
-    if watch_time >= max(duration * 0.5, 1.0):
+    # More lenient classification:
+    # If watched >= 30% of duration (was 50%), classify as STAY
+    # OR if watched >= 3 seconds (was 1 second) for very short videos
+    threshold_percentage = 0.30  # 30% instead of 50%
+    min_watch_time = 3.0  # 3 seconds minimum
+    
+    watched_percentage = watch_time / duration if duration > 0 else 0
+    
+    if watch_time >= max(duration * threshold_percentage, min_watch_time):
         embedding_store.add_to_stay(metadata)
-        print(f"Added to STAY collection (watched {watch_time:.1f}s / {duration}s)")
+        print(f"Added to STAY collection (watched {watch_time:.1f}s / {duration}s = {watched_percentage*100:.1f}%)")
+        
+        # Show if this contradicts LLM prediction
+        if llm_decision == "SCROLL":
+            print(f"  ⚠️ LLM predicted SCROLL but user stayed - learning from override")
     else:
         embedding_store.add_to_scroll(metadata)
-        print(f"Added to SCROLL collection (watched {watch_time:.1f}s / {duration}s)")
+        print(f"Added to SCROLL collection (watched {watch_time:.1f}s / {duration}s = {watched_percentage*100:.1f}%)")
+        
+        # Show if this contradicts LLM prediction
+        if llm_decision == "STAY":
+            print(f"  ⚠️ LLM predicted STAY but user scrolled - learning from override")
 
 
 async def watch_video_with_monitoring(driver, video_data: dict, is_revisit: bool = False):
     """
     Watch video for specified time while monitoring for manual scrolls.
     - If LLM said SCROLL: wait 1.0 seconds then scroll
-    - If LLM said STAY: wait full duration then scroll
+    - If LLM said STAY: wait full duration then scroll to next
     - If is_revisit: wait full duration regardless, then scroll
     """
     decision = video_data['decision']
@@ -115,7 +135,7 @@ async def watch_video_with_monitoring(driver, video_data: dict, is_revisit: bool
     elif decision == "SCROLL":
         wait_time = 1.0  # Minimum 1.0 seconds
     else:  # STAY
-        wait_time = duration
+        wait_time = duration  # Wait full duration for STAY videos
     
     start_time = time.time()
     target_end_time = start_time + wait_time
@@ -125,16 +145,16 @@ async def watch_video_with_monitoring(driver, video_data: dict, is_revisit: bool
         if driver.current_url != current_url:
             # User manually scrolled
             return
-        await asyncio.sleep(0.1)  # Check every 0.1 seconds for even faster response
+        await asyncio.sleep(0.1)
     
-    # Time's up, scroll to next video immediately
+    # Time's up, scroll to next video
     try:
         body = driver.find_element("tag name", "body")
         body.send_keys(Keys.ARROW_DOWN)
-    except:
+    except Exception:
         pass  # If scroll fails, continue anyway
     
-    await asyncio.sleep(0.3)  # Reduced wait time for faster scrolling
+    await asyncio.sleep(0.3)
 
 
 async def main():
@@ -148,6 +168,7 @@ async def main():
     user_preference = get_user_preference_from_gui()
     
     if not user_preference:
+        print("[Error] No user preference provided. Exiting.")
         return
     
     try:
@@ -155,8 +176,12 @@ async def main():
         embedding_store = VideoEmbeddingStore()
         decision_system = VideoDecisionSystem()
     except Exception as e:
+        print(f"[Error] Failed to initialize processing components: {e}")
+        import traceback
+        traceback.print_exc()
         return
     
+    driver = None
     try:
         chrome_options = Options()
         chrome_options.add_experimental_option("debuggerAddress", "127.0.0.1:9222")
@@ -167,29 +192,104 @@ async def main():
         time.sleep(3)
         
     except Exception as e:
+        print(f"[Error] Failed to connect to Chrome browser: {e}")
+        print("Make sure Chrome is running with remote debugging enabled:")
+        print('  /Applications/Google\\ Chrome.app/Contents/MacOS/Google\\ Chrome --remote-debugging-port=9222')
         return
     
     # State tracking
     seen_shorts = set()
     current_video_data = None
     processed_videos = {}  # Track videos we've already processed with LLM
+    classified_videos = set()  # Track videos we've already added to collections
     active_monitoring_task = None  # Track the current monitoring task
-    last_url = None  # Track the last URL to detect manual navigation
+    
+    # Initialize hand gesture controller
+    gesture_controller = HandGestureController(show_video=True)
+    gesture_controller.start()
+    print("\n[Gesture Control Enabled]")
+    print("Hand Gestures:")
+    print("  - Swipe DOWN with hand to scroll to next video")
+    print("  - Swipe UP with hand to scroll to previous video")
+    print("Head Pose:")
+    print("  - Nod DOWN (look down then return to neutral) to scroll to next video")
+    print("  - Nod UP (look up then return to neutral) to scroll to previous video")
+    print("- Press 'q' in the tracking window to quit")
+    
+    # Configure window size and position (small window in bottom right)
+    window_name = "Gesture Tracking"
+    window_width = 320  # Small width
+    window_height = 240  # Small height
+    
+    try:
+        cv2.namedWindow(window_name, cv2.WINDOW_NORMAL)
+        cv2.resizeWindow(window_name, window_width, window_height)
+        
+        # Position window in bottom right corner with safe margins
+        # Assuming common screen widths (adjust if needed for your screen)
+        cv2.moveWindow(window_name, 1200, 500)  # Bottom right with margin
+    except Exception as e:
+        print(f"[Warning] Could not configure CV window position: {e}")
+        print("  Window will appear in default position")
     
     try:
         while True:
             current_url = driver.current_url
             
+            # Display camera feed (must be in main thread for macOS)
+            try:
+                with gesture_controller.frame_lock:
+                    if gesture_controller.latest_frame is not None:
+                        # Resize frame to fit small window
+                        small_frame = cv2.resize(gesture_controller.latest_frame, (window_width, window_height))
+                        cv2.imshow(window_name, small_frame)
+            except Exception as e:
+                # If display fails, just continue without it
+                pass
+            
+            # Check for 'q' key to quit
+            if cv2.waitKey(1) & 0xFF == ord('q'):
+                print("\n[User pressed 'q' - quitting...]")
+                break
+            
+            # Check for hand gestures
+            gesture = gesture_controller.get_gesture()
+            if gesture:
+                try:
+                    body = driver.find_element("tag name", "body")
+                    if gesture == 'DOWN':
+                        body.send_keys(Keys.ARROW_DOWN)
+                        print("[Gesture] Scrolling DOWN")
+                    elif gesture == 'UP':
+                        body.send_keys(Keys.ARROW_UP)
+                        print("[Gesture] Scrolling UP")
+                except Exception as e:
+                    print(f"[Gesture] Scroll failed: {e}")
+            
             # Case 1: URL changed (previous video ended or user manually scrolled)
             if current_video_data and current_url != current_video_data['url']:
-                # Calculate watch time and classify previous video
-                watch_time = time.time() - current_video_data['start_time']
-                classify_and_add_to_collection(current_video_data, watch_time, embedding_store)
+                video_url = current_video_data['url']
+                
+                # Only classify if we haven't classified this video before
+                if video_url not in classified_videos:
+                    # Calculate watch time and classify previous video
+                    watch_time = time.time() - current_video_data['start_time']
+                    classify_and_add_to_collection(current_video_data, watch_time, embedding_store)
+                    classified_videos.add(video_url)  # Mark as classified
+                else:
+                    # Already classified - just report watch time
+                    watch_time = time.time() - current_video_data['start_time']
+                    print(f"[Revisit] Already classified - watched {watch_time:.1f}s this time")
+                
                 current_video_data = None
                 
                 # Cancel the previous monitoring task if it's still running
                 if active_monitoring_task and not active_monitoring_task.done():
                     active_monitoring_task.cancel()
+                    try:
+                        await active_monitoring_task
+                    except asyncio.CancelledError:
+                        pass  # Expected when cancelling
                     active_monitoring_task = None
             
             # Case 2: Video detected (new or revisited)
@@ -241,9 +341,11 @@ async def main():
                     
                     if not is_revisit:
                         print(f"Decision: {decision}, Reasoning: {reasoning}")
-                    
-                    # Update last_url
-                    last_url = current_url
+                        if decision == "STAY":
+                            vid_duration = metadata.get('duration', 10)
+                            print(f"  ⏸️  Will auto-scroll after {vid_duration} seconds (full duration)")
+                        else:
+                            print(f"  ⏩  Will auto-scroll after 1.0 second")
                     
                     # Always create monitoring task, but pass is_revisit flag
                     active_monitoring_task = asyncio.create_task(
@@ -253,11 +355,20 @@ async def main():
             await asyncio.sleep(0.1)  # Check URL changes even more frequently
             
     except KeyboardInterrupt:
-        pass
+        print("\n[Shutting down...]")
     except Exception as e:
-        pass
+        print(f"\n[Error]: {e}")
+        import traceback
+        traceback.print_exc()
     finally:
-        driver.quit()
+        gesture_controller.stop()
+        cv2.destroyAllWindows()
+        if driver:
+            try:
+                driver.quit()
+            except Exception as e:
+                print(f"[Warning] Error closing driver: {e}")
+        print("[Cleanup complete]")
 
 
 if __name__ == "__main__":

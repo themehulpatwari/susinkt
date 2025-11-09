@@ -169,34 +169,37 @@ class VideoDecisionSystem:
             # Cold start - rely entirely on user preferences
             weight_instruction = (
                 "IMPORTANT: This is a cold start with NO behavioral data. "
-                "Make your decision ENTIRELY based on the user's preferences. "
-                "When unsure, default to SCROLL to avoid wasting the user's time. "
+                "Make your decision based on user preferences. "
+                "Target 50/50 STAY vs SCROLL ratio - be balanced and fair. "
+                "STAY if content reasonably matches preferences. SCROLL if clearly doesn't match. "
                 "Ignore the behavioral similarity scores as they are meaningless."
             )
         elif confidence < 40:
-            # Low confidence - strictly follow user preferences
+            # Low confidence - follow user preferences with nuance
             weight_instruction = (
                 "WEIGHTING STRATEGY: Low behavioral confidence (< 20 samples). "
-                "Follow user preferences STRICTLY (~95%) with minimal consideration for behavioral patterns (~5%). "
-                "The behavioral data is not reliable yet. "
-                "When unsure, default to SCROLL to be conservative."
+                "Follow user preferences (~70%) with behavioral hints (~30%). "
+                "Be balanced - STAY if content reasonably matches preferences or behavioral patterns. "
+                "SCROLL if content doesn't align with either signal. "
+                "Target roughly 50/50 decisions to build better behavioral data."
             )
         elif confidence < 100:
             # Moderate confidence - balanced approach
             weight_instruction = (
                 "WEIGHTING STRATEGY: Moderate behavioral confidence (20-49 samples). "
-                "Balance user preferences (~70%) with behavioral patterns (~30%). "
-                "Use behavioral data to refine your understanding, but preferences should still dominate. "
-                "When unsure, default to SCROLL to be conservative."
+                "Balance user preferences (~60%) with behavioral patterns (~40%). "
+                "Use behavioral similarity scores to guide close calls. "
+                "STAY if stay_similarity > scroll_similarity OR strong preference match. "
+                "SCROLL if scroll_similarity > stay_similarity AND weak preference match."
             )
         else:
             # High confidence - trust behavioral patterns more
             weight_instruction = (
                 "WEIGHTING STRATEGY: High behavioral confidence (50+ samples). "
-                "Balance user preferences (~50%) with strong behavioral patterns (~50%). "
-                "Behavioral data is now reliable and can equally inform decisions. "
-                "When preferences and behavior conflict, favor behavior as it reflects actual engagement. "
-                "When unsure, use behavioral similarity scores to guide the decision."
+                "Balance user preferences (~50%) with behavioral patterns (~50%). "
+                "Trust the behavioral similarity scores - they reflect actual engagement. "
+                "STAY if stay_similarity > scroll_similarity OR perfect preference match. "
+                "SCROLL if scroll_similarity > stay_similarity AND average/weak preference match."
             )
         
         prompt = f"""You are an AI assistant that helps decide whether a user should STAY and watch a YouTube Short or SCROLL to the next one.
@@ -217,12 +220,31 @@ Your response MUST be a valid JSON object with this EXACT format:
   "reasoning": "Brief one-line explanation"
 }}
 
+CRITICAL DECISION GUIDELINES:
+- Be BALANCED and FAIR - aim for roughly 50% STAY, 50% SCROLL
+- User preferences indicate interests but allow reasonable interpretation
+- Interpret preferences reasonably:
+  * "Funny" = comedy, humor, wholesome moments, entertaining situations
+  * "Educational" = how-to, facts, tips, life hacks, interesting information
+  * "Inspiring" = success, motivation, kindness, uplifting stories
+- Consider BOTH preference match AND behavioral similarity scores (when available)
+- STAY if: Strong preference match OR stay_similarity > scroll_similarity
+- SCROLL if: Poor preference match OR scroll_similarity > stay_similarity  
+- When uncertain or equal signals: slightly favor variety (SCROLL)
+- Related/adjacent content that might interest user: lean towards STAY
+- Completely unrelated or opposite to preferences: SCROLL
+
+DECISION FRAMEWORK:
+1. Strong preference match + high stay_similarity = STAY
+2. Good preference match + neutral/no behavioral data = STAY
+3. Weak preference match + scroll_similarity > stay_similarity = SCROLL
+4. Poor preference match + any behavioral data = SCROLL
+5. Uncertain or truly ambiguous = slight favor to SCROLL (for variety)
+
 Remember:
-- User preferences are the primary factor, especially early on
-- Behavioral patterns become more important as confidence increases (50+ videos)
-- When unsure or confidence is low, follow user preferences and default to SCROLL
-- Consider content type, topic, engagement quality, and visual elements
-- Be decisive - choose either STAY or SCROLL, not both
+- Be fair and balanced - neither overly selective nor overly permissive
+- Both STAY and SCROLL are valid choices for feed curation
+- Behavioral similarity scores are valuable signals when available
 - Keep reasoning to a single concise sentence"""
 
         return prompt
@@ -249,7 +271,8 @@ Remember:
                 
                 # Validate decision
                 if decision not in ['STAY', 'SCROLL']:
-                    decision = 'STAY'  # Default
+                    # When truly uncertain, slightly favor SCROLL for variety
+                    decision = 'SCROLL'
                 
                 return decision, reasoning
             else:
@@ -260,7 +283,8 @@ Remember:
                 if decision_match:
                     decision = decision_match.group(1).upper()
                 else:
-                    decision = "STAY" if 'STAY' in response_text.upper() else "SCROLL" if 'SCROLL' in response_text.upper() else "STAY"
+                    # Default to SCROLL if unclear
+                    decision = "SCROLL" if 'SCROLL' in response_text.upper() else "STAY" if 'STAY' in response_text.upper() else "SCROLL"
                 
                 reasoning = reasoning_match.group(1).strip() if reasoning_match else response_text.strip()
                 
@@ -268,12 +292,12 @@ Remember:
                 
         except json.JSONDecodeError:
             # If JSON parsing fails, use fallback
-            if 'STAY' in response_text.upper():
-                decision = "STAY"
-            elif 'SCROLL' in response_text.upper():
+            if 'SCROLL' in response_text.upper():
                 decision = "SCROLL"
-            else:
+            elif 'STAY' in response_text.upper():
                 decision = "STAY"
+            else:
+                decision = "SCROLL"  # Default to SCROLL when uncertain
             
             reasoning = response_text.strip()
             return decision, reasoning
